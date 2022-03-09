@@ -7,8 +7,8 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
-	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 type Server struct {
@@ -90,31 +90,50 @@ func (server *Server) listen() {
 func main() {
 	server := NewServer()
 
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Println("ERROR", err)
+	}
+	defer watcher.Close()
+
+	done := make(chan bool)
+
+	fileName := "./data.log"
+
 	go func() {
-		mTime := ""
-
 		for {
-			time.Sleep(time.Second * 2)
-
-			f, err := os.Stat("data.log")
-			if err != nil {
-				continue
-			}
-
-			fMTime := fmt.Sprintf("%s", f.ModTime())
-
-			if mTime != fMTime {
-				d, err := ioutil.ReadFile(f.Name())
-				if err != nil {
-					continue
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
 				}
+				log.Println("event:", event)
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					log.Println("modified file:", event.Name)
+					d, err := ioutil.ReadFile(fileName)
+					if err != nil {
+						continue
+					}
 
-				log.Println("Receiving event: ", string(d))
-				server.Notifier <- d
+					log.Println("Receiving event: ", string(d))
+					server.Notifier <- d
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Println("error:", err)
 			}
-			mTime = fMTime
 		}
 	}()
 
+	if err := watcher.Add(fileName); err != nil {
+		log.Println("ERROR", err)
+	} else {
+		log.Println("Watcher started")
+	}
+	<-done
+
 	log.Fatal("HTTP server error: ", http.ListenAndServe("localhost:8000", server))
+
 }
