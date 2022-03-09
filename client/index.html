@@ -1,0 +1,77 @@
+<!-- https://www.woolha.com/tutorials/node-js-sse-server-sent-events-example-javascript-client -->
+
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title></title>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/event-source-polyfill/0.0.9/eventsource.js"></script>
+  <script>
+    var es;
+
+    document.addEventListener('DOMContentLoaded', function () {
+      showElem(document.querySelector('#open'));
+      hideElem(document.querySelector('#close'));
+
+      document.querySelector('#open').addEventListener('click', function () {
+        hideElem(document.querySelector('#open'));
+        showElem(document.querySelector('#close'));
+        open();
+      });
+
+      document.querySelector('#close').addEventListener('click', function () {
+        showElem(document.querySelector('#open'));
+        hideElem(document.querySelector('#close'));
+        close();
+      });
+    }, false);
+
+    window.addEventListener('beforeunload', function (e) {
+      close()
+    });
+
+    function showElem(elem) {
+      elem.style.display = 'block';
+    }
+
+    function hideElem(elem) {
+      elem.style.display = 'none';
+    }
+
+    function open() {
+      const params = new URLSearchParams(window.location.search);
+      const userId = params.get("userId");
+
+      es = new EventSource('http://localhost:8000?userId=' + userId);
+      const listener = function (event) {
+        const type = event.type;
+        window.console.log(`${type}: ${event.data || es.url}`);
+        if (type === 'result') {
+          es.close();
+        }
+      };
+
+      es.addEventListener('open', listener);
+      es.addEventListener('message', listener);
+      es.addEventListener('error', listener);
+      es.addEventListener('result', listener);
+    }
+
+    function close() {
+      console.log("close")
+      if (es !== undefined) {
+        es.close();
+      }
+    }
+
+  </script>
+</head>
+
+<body>
+  <input type="button" id="open" value="open" />
+  <input type="button" id="close" value="close" />
+</body>
+
+</html>
