@@ -1,5 +1,3 @@
-<!-- https://www.woolha.com/tutorials/node-js-sse-server-sent-events-example-javascript-client -->
-
 <!DOCTYPE html>
 <html>
 
@@ -44,7 +42,7 @@
       const params = new URLSearchParams(window.location.search);
       const userId = params.get("userId");
 
-      es = new EventSource('http://localhost:8000?userId=' + userId, {
+      es = new EventSource('http://localhost:8000/server-side-event/' + userId, {
         headers: {
           "Access-Control-Allow-Origin": "*",
         }
@@ -52,11 +50,17 @@
       const listener = function (event) {
         const type = event.type;
 
-        console.log(`${type}:`, event);
         console.log(`${type}: ${event.data || es.url}`);
-        if (type === 'result') {
-          es.close();
+        if (
+          type === 'result'
+          || type === 'error'
+        ) {
+          console.log(type)
+          showElem(document.querySelector('#open'));
+          hideElem(document.querySelector('#close'));
+          close();
         }
+
       };
 
       es.addEventListener('open', listener);

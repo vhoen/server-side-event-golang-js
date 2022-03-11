@@ -1,25 +1,28 @@
-// https://thoughtbot.com/blog/writing-a-server-sent-events-server-in-go
-
 package main
 
 import (
+	"context"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"time"
 
-	"github.com/fsnotify/fsnotify"
+	"github.com/gorilla/mux"
+
+	"github.com/sirupsen/logrus"
 )
 
-type Server struct {
+type EventServer struct {
 	Notifier       chan []byte
 	newClients     chan chan []byte
 	closingClients chan chan []byte
 	clients        map[chan []byte]bool
 }
 
-func NewServer() (server *Server) {
-	server = &Server{
+func NewEventServer() (server *EventServer) {
+	server = &EventServer{
 		Notifier:       make(chan []byte, 1),
 		newClients:     make(chan chan []byte),
 		closingClients: make(chan chan []byte),
@@ -31,43 +34,7 @@ func NewServer() (server *Server) {
 	return
 }
 
-func (server *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
-	flusher, ok := rw.(http.Flusher)
-	if !ok {
-		http.Error(rw, "Streaming unsupported!", http.StatusInternalServerError)
-		return
-	}
-
-	userId := req.URL.Query().Get("userId")
-	log.Printf("userId: %s", userId)
-
-	rw.Header().Set("Content-Type", "text/event-stream")
-	rw.Header().Set("Cache-Control", "no-cache")
-	rw.Header().Set("Connection", "keep-alive")
-	rw.Header().Set("Access-Control-Allow-Origin", "*")
-
-	messageChan := make(chan []byte)
-
-	server.newClients <- messageChan
-	defer func() {
-		server.closingClients <- messageChan
-	}()
-
-	notify := req.Context().Done()
-
-	go func() {
-		<-notify
-		server.closingClients <- messageChan
-	}()
-
-	for {
-		fmt.Fprintf(rw, "data: %s\n\n", <-messageChan)
-		flusher.Flush()
-	}
-
-}
-
-func (server *Server) listen() {
+func (server *EventServer) listen() {
 	for {
 		select {
 		case s := <-server.newClients:
@@ -84,56 +51,86 @@ func (server *Server) listen() {
 			}
 		}
 	}
+}
 
+func startMockEvents(server *EventServer) {
+	for {
+		txt := time.Now().Format("2006-01-02 15:04:05")
+		logrus.Info("sending event: ", txt)
+		server.Notifier <- []byte(txt)
+		time.Sleep(time.Second * 2)
+	}
 }
 
 func main() {
-	server := NewServer()
+	Timeout := time.Minute * 1
 
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Println("ERROR", err)
-	}
-	defer watcher.Close()
+	router := mux.NewRouter().StrictSlash(true)
+	router.HandleFunc("/server-side-event/{userId}", func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			err := fmt.Errorf("streaming unsupported")
+			logrus.Info(err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
-	done := make(chan bool)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	fileName := "./data.log"
+		messageChan := make(chan []byte)
 
-	go func() {
+		server := NewEventServer()
+
+		go startMockEvents(server)
+
+		server.newClients <- messageChan
+		defer func() {
+			server.closingClients <- messageChan
+		}()
+
 		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				log.Println("event:", event)
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					log.Println("modified file:", event.Name)
-					d, err := ioutil.ReadFile(fileName)
-					if err != nil {
-						continue
-					}
+			fmt.Fprintf(w, "data: %s\n\n", <-messageChan)
+			flusher.Flush()
+		}
 
-					log.Println("Receiving event: ", string(d))
-					server.Notifier <- d
-				}
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				log.Println("error:", err)
-			}
+		notify := r.Context().Done()
+		go func() {
+			<-notify
+			server.closingClients <- messageChan
+		}()
+
+	}).Methods(http.MethodGet, http.MethodOptions)
+
+	server := &http.Server{
+		Addr:         "0.0.0.0:8000",
+		WriteTimeout: 0,
+		ReadTimeout:  0,
+		IdleTimeout:  0,
+		Handler:      router,
+	}
+	go func() {
+		if err := server.ListenAndServe(); err != nil {
+			logrus.Fatal(err)
 		}
 	}()
 
-	if err := watcher.Add(fileName); err != nil {
-		log.Println("ERROR", err)
-	} else {
-		log.Println("Watcher started")
-	}
-	<-done
+	// Process signals channel
+	sigChannel := make(chan os.Signal, 1)
 
-	log.Fatal("HTTP server error: ", http.ListenAndServe("localhost:8000", server))
+	// Graceful shutdown via SIGINT
+	signal.Notify(sigChannel, os.Interrupt)
+
+	logrus.Info("Service running...")
+	<-sigChannel // Block until SIGINT received
+
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+
+	server.Shutdown(ctx)
+
+	logrus.Info("Http Service shutdown")
 
 }
