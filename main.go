@@ -37,15 +37,19 @@ func NewEventServer() (server *EventServer) {
 func (server *EventServer) listen() {
 	for {
 		select {
+		// Gestion des nouveaux clients
 		case s := <-server.newClients:
 			server.clients[s] = true
 			log.Printf("Client added. %d registered clients", len(server.clients))
 
+		// gestion des deconnexion de client
 		case s := <-server.closingClients:
 			delete(server.clients, s)
 			log.Printf("Removed client. %d registered clients", len(server.clients))
 
+		// gestion des nouveaux messages
 		case event := <-server.Notifier:
+			// pour chaque client on envoie le message
 			for clientMessageChan := range server.clients {
 				clientMessageChan <- event
 			}
@@ -57,12 +61,16 @@ func startMockEvents(server *EventServer) {
 	for {
 		txt := time.Now().Format("2006-01-02 15:04:05")
 		logrus.Info("sending event: ", txt)
-		server.Notifier <- []byte(txt)
+		server.Notifier <- []byte(txt) // Envoi du message
 		time.Sleep(time.Second * 2)
 	}
 }
 
 func main() {
+	users := map[string]string{
+		"azer": "Mr Azer",
+	}
+
 	Timeout := time.Minute * 1
 
 	router := mux.NewRouter().StrictSlash(true)
@@ -80,27 +88,43 @@ func main() {
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 
-		messageChan := make(chan []byte)
+		currentUserName := "Stranger"
 
+		vars := mux.Vars(r)
+		userId := vars["userId"]
+		if userId != "" {
+			userName, ok := users[userId]
+			if ok {
+				currentUserName = userName
+			}
+		}
+
+		// nouveau serveur
 		server := NewEventServer()
 
+		// On lance une routine qui va envoyer des messages à intervalles régulier
 		go startMockEvents(server)
 
+		messageChan := make(chan []byte)
+		// gestion des nouvelles connexions
 		server.newClients <- messageChan
+
+		// gestion des deconnexions
 		defer func() {
 			server.closingClients <- messageChan
 		}()
-
-		for {
-			fmt.Fprintf(w, "data: %s\n\n", <-messageChan)
-			flusher.Flush()
-		}
-
 		notify := r.Context().Done()
 		go func() {
 			<-notify
 			server.closingClients <- messageChan
 		}()
+
+		// on envoie les message au ResponseWriter
+		for {
+			msg := fmt.Sprintf("Hello %s, it's : %s", currentUserName, <-messageChan)
+			fmt.Fprintf(w, "data: %s\n\n", msg)
+			flusher.Flush()
+		}
 
 	}).Methods(http.MethodGet, http.MethodOptions)
 
